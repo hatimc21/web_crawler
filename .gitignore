@@ -1,0 +1,19 @@
+# Ignore all files in the output directory
+output/*
+
+# Ignore all files in the temp directory
+temp/*
+
+# Ignore the env folder
+env/*
+
+# Ignore environment files
+*.env
+
+# Ignore PDF files
+*.pdf
+
+# Ignore the Python virtual environment folder
+env/
+
+
