@@ -13,7 +13,7 @@ import re
 class WebCrawlerGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Web Crawler (One-Big-HTML PDF Export)")
+        self.root.title("Web Crawler (Per-Page PDF + Merge)")
         self.root.geometry("800x600")
         self.root.minsize(700, 500)
         
@@ -151,7 +151,7 @@ class WebCrawlerGUI:
             self.stop_button.config(state=tk.DISABLED)
     
     def run_crawler(self):
-        """Run the crawler"""
+        """Run the crawler in a background thread"""
         try:
             url = self.url_var.get()
             depth = self.depth_var.get()
@@ -173,9 +173,9 @@ class WebCrawlerGUI:
                 crawler.crawl()
                 
                 if self.is_running:
-                    self.log("Crawling completed. Creating single big HTML and exporting to PDF...")
+                    self.log("Crawling completed. Now exporting each page as PDF and merging...")
                     crawler.export_to_pdf(output)
-                    self.log(f"PDF saved as {output}")
+                    self.log(f"Final merged PDF saved as {output}")
                     
                     # Try to open the folder containing the PDF
                     try:
@@ -216,7 +216,7 @@ class WebCrawler:
         self.visited_urls = set()
         self.to_visit = [(start_url, 0)]  # (url, depth)
         
-        # We'll store raw HTML for each page so we can build one big doc
+        # We'll store raw HTML for each page so we can create a PDF snapshot for each.
         self.scraped_data = {}  # { url: { 'title': ..., 'html': ..., 'depth': ... } }
         
         self.base_domain = urlparse(start_url).netloc
@@ -379,100 +379,60 @@ class WebCrawler:
         if self.progress_callback:
             self.progress_callback(processed_urls, total_urls)
     
-    def export_to_pdf(self, filename="scraped_data.pdf"):
+    def export_to_pdf(self, merged_pdf="scraped_data.pdf"):
         """
-        Build a single big HTML containing all pages, rewriting internal links 
-        to in-document anchors, then generate ONE PDF via Playwright.
-        """
-        self.log("Generating one big HTML document from crawled pages...")
-        big_html = self.build_big_html()
+        For each crawled page:
+          1. Render the raw HTML in Playwright (headless browser).
+          2. Generate a PDF file for that page.
+        Finally, merge all PDFs into a single file using PyPDF2.
         
-        self.log("Rendering combined HTML to PDF via Playwright (this might take a moment)...")
+        NOTE: Cross-page links won't be converted into in-PDF jumps. They'll remain external.
+        """
+        self.log("Exporting each crawled page to its own PDF...")
+
+        # Sort items by depth, then URL
+        sorted_items = sorted(self.scraped_data.items(), key=lambda x: (x[1]['depth'], x[0]))
+        
+        temp_pdfs = []
+        
         from playwright.sync_api import sync_playwright
+        from PyPDF2 import PdfMerger
         
+        # 1) Create each page's PDF
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page()
 
-            # Set the combined HTML content
-            page.set_content(big_html, wait_until="networkidle")
-            
-            # Export to PDF
-            page.pdf(path=filename, format="A4", print_background=True)
+            total = len(sorted_items)
+            for i, (url, data) in enumerate(sorted_items, start=1):
+                temp_pdf = f"temp_page_{i}.pdf"
+                self.log(f"({i}/{total}) Generating PDF for: {data['title']} -> {temp_pdf}")
+                
+                # set the raw HTML content
+                page.set_content(data['html'], wait_until="networkidle")
+                
+                # print to PDF
+                page.pdf(path=temp_pdf, format="A4", print_background=True)
+                
+                temp_pdfs.append(temp_pdf)
+
             browser.close()
         
-        self.log(f"PDF saved as {filename}")
+        # 2) Merge all PDFs into a single file
+        self.log("Merging all page PDFs into one final file...")
+        merger = PdfMerger()
+        for pdf_file in temp_pdfs:
+            merger.append(pdf_file)
 
-    def build_big_html(self):
-        """
-        Build a single HTML doc with:
-          - A table of contents linking to each page's anchor
-          - Each page's HTML in a <section> with an <a name="..."> anchor
-          - Internal links pointing to #anchors instead of external URLs
-        """
-        from bs4 import BeautifulSoup
-
-        # Sort URLs by depth (and alphabetically for stability)
-        sorted_items = sorted(self.scraped_data.items(), key=lambda x: (x[1]['depth'], x[0]))
+        merger.write(merged_pdf)
+        merger.close()
         
-        # Create a mapping from URL -> anchor_id
-        anchor_map = {}
-        for i, (url, data) in enumerate(sorted_items):
-            anchor_map[url] = f"page_{i}"
+        # 3) Cleanup temp files
+        for pdf_file in temp_pdfs:
+            if os.path.exists(pdf_file):
+                os.remove(pdf_file)
         
-        # Build a table of contents
-        html_output = [
-            "<html><head>",
-            "<meta charset='utf-8'/>",
-            "<title>Crawled Data</title></head><body>",
-            "<h1>Table of Contents</h1><ul>"
-        ]
-        
-        for url, data in sorted_items:
-            anchor_id = anchor_map[url]
-            title = data['title']
-            # Link to the anchor
-            html_output.append(f'<li><a href="#{anchor_id}">{title}</a></li>')
-        html_output.append("</ul><hr>")
-        
-        # Build sections for each page
-        for url, data in sorted_items:
-            anchor_id = anchor_map[url]
-            # Original raw HTML
-            raw_html = data['html']
-            
-            # Parse so we can rewrite links
-            soup = BeautifulSoup(raw_html, 'html.parser')
-            
-            # Rewrite links that point to other crawled pages => #some_anchor
-            for a_tag in soup.find_all('a', href=True):
-                link = a_tag['href']
-                full_link = urljoin(url, link)
-                if full_link in anchor_map:
-                    a_tag['href'] = f"#{anchor_map[full_link]}"
-            
-            # Add a heading with anchor
-            html_output.append(f'<section><a name="{anchor_id}"></a>')
-            html_output.append(f'<h2>{data["title"]}</h2>')
-            
-            # Ideally, remove <script>, etc., or keep them for styling if needed
-            # We'll just keep the entire <body> for a near-original look:
-            # If the site is huge, consider removing repeated <header>, <footer>, etc.
-            # But let's keep it simple:
-            
-            # Insert the body or entire soup
-            body = soup.body
-            if body:
-                # The <body> content only
-                html_output.append(str(body))
-            else:
-                # Fallback: the entire HTML if <body> not found
-                html_output.append(raw_html)
-            
-            html_output.append("</section><hr>")
-        
-        html_output.append("</body></html>")
-        return "\n".join(html_output)
+        self.log(f"All per-page PDFs merged into {merged_pdf}, temp files removed.")
 
 
 def main():
