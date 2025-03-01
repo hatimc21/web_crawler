@@ -36,7 +36,7 @@ A robust Python web crawler that recursively visits links, scrapes content, and 
 1. **Clone this repository** or download the source code:
    ```bash
    git clone https://github.com/hatimc21/web_crawler.git
-   cd web-crawler
+   cd web_crawler
    ```
 
 2. *(Optional but recommended)* **Create a virtual environment**:
@@ -68,7 +68,7 @@ A robust Python web crawler that recursively visits links, scrapes content, and 
 
 1. **Run the GUI**:
    ```bash
-   python web_crawler_gui.py
+   python web_crawler.py
    ```
 2. **Enter your settings**:
    - **URL to Crawl**: e.g. `https://example.com`
