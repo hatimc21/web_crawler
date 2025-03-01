@@ -35,7 +35,7 @@ A robust Python web crawler that recursively visits links, scrapes content, and 
 
 1. **Clone this repository** or download the source code:
    ```bash
-   git clone https://github.com/yourusername/web-crawler.git
+   git clone https://github.com/hatimc21/web_crawler.git
    cd web-crawler
    ```
 
